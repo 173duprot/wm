@@ -5,23 +5,27 @@
 #include <X11/keysym.h>
 #include <X11/Xlib.h>
 
-#define NSPACE   9
-#define NCLIENT  7 
-#define NELEM(a) (sizeof(a) / sizeof(*(a)))
+#include "wm.h"
 
-typedef union  { int i; float f; const char **v; } Arg;
-typedef struct { unsigned int mod; KeySym sym; int act; Arg arg; } Key;
+#define SPLITRATIO 0.5f
+#define NELEM(a)   (sizeof(a) / sizeof(*(a)))
+
 typedef struct { Window win; int isfull; } Client;
 
+/* Forward Declarations */
+static int xerror(Display *d, XErrorEvent *e);
+static void tile(void);
+static int rmclient(Window w);
+
+/* Global State */
 static Display *dpy;
 static Window   root;
 static int      scrw, scrh, curspace, running = 1;
-static float    splitratio = 0.5f;
+static float    splitratio = SPLITRATIO;
 static Client   clients[NSPACE][NCLIENT];
 static int      nclients[NSPACE], selclient[NSPACE];
 
-static int xerror(Display *d, XErrorEvent *e)
-{
+static int xerror(Display *d, XErrorEvent *e) {
     /* Safely ignore all asynchronous X11 protocol errors */
     return 0; (void) d, (void)e;
 }
@@ -29,7 +33,7 @@ static int xerror(Display *d, XErrorEvent *e)
 static void tile(void) {
     for (int s = 0; s < NSPACE; s++) {
         int nc = nclients[s];
-        
+         
         if (nc > 0) { selclient[s] %= nc; }
 
         for (int i = 0; i < nc; i++) {
@@ -41,15 +45,15 @@ static void tile(void) {
             }
 
             if (c->isfull) {
-                XMoveResizeWindow(dpy, c->win, 0, 0, scrw, scrh);
+                XMoveResizeWindow(dpy, c->win, 0, BARH, scrw, scrh);
                 continue;
             }
 
             int mastw  = (nc > 1) ? (int)(scrw * splitratio) : scrw;
             int stackc = (nc > 1) ? (nc - 1) : 1;
-            
+             
             int cx = i ? mastw : 0;
-            int cy = i ? (i - 1) * (scrh / stackc) : 0;
+            int cy = (i ? (i - 1) * (scrh / stackc) : 0) + BARH;
             int cw = i ? (scrw - mastw) : mastw;
             int ch = i ? (scrh / stackc) : scrh;
 
@@ -59,9 +63,9 @@ static void tile(void) {
 
     Client *f = nclients[curspace] ? &clients[curspace][selclient[curspace]] : NULL;
     XSetInputFocus(dpy, f ? f->win : root, RevertToPointerRoot, CurrentTime);
-    
+     
     if (f) { XRaiseWindow(dpy, f->win); }
-    
+     
     XSync(dpy, False);
 }
 
@@ -78,8 +82,6 @@ static int rmclient(Window w) {
     return 0;
 }
 
-#include "wm.h"
-
 int main(void) {
     XEvent ev;
 
@@ -92,8 +94,12 @@ int main(void) {
 #endif
 
     root = DefaultRootWindow(dpy);
+    
+    XSetWindowBackground(dpy, root, BlackPixel(dpy, DefaultScreen(dpy)));
+    XClearWindow(dpy, root);
+    
     scrw = DisplayWidth(dpy, 0);
-    scrh = DisplayHeight(dpy, 0);
+    scrh = DisplayHeight(dpy, 0) - BARH;
 
     XSelectInput(dpy, root, SubstructureRedirectMask | SubstructureNotifyMask | KeyPressMask);
 
@@ -101,7 +107,7 @@ int main(void) {
         XGrabKey(dpy, XKeysymToKeycode(dpy, keys[i].sym), keys[i].mod,
             root, True, GrabModeAsync, GrabModeAsync);
     }
-    
+     
     signal(SIGCHLD, SIG_IGN);
 
     while (running && !XNextEvent(dpy, &ev)) {
@@ -109,21 +115,23 @@ int main(void) {
         case MapRequest: {
             XWindowAttributes wa;
             Window w = ev.xmaprequest.window;
-            
-            /* Robustness: Actively refuse and destroy the window if over capacity */
-            if (nclients[curspace] >= NCLIENT) { 
+             
+            if (nclients[curspace] >= NCLIENT) {  
                 XDestroyWindow(dpy, w);
-                break; 
+                break;  
             }
             if (!XGetWindowAttributes(dpy, w, &wa) || wa.override_redirect) { break; }
-            
+             
             clients[curspace][nclients[curspace]] = (Client){ w, 0 };
             XSelectInput(dpy, w, EnterWindowMask | StructureNotifyMask);
-            XMapWindow(dpy, w);
             
+            XGrabButton(dpy, Button1, AnyModifier, w, False, ButtonPressMask, GrabModeSync, GrabModeAsync, None, None);
+             
             selclient[curspace] = nclients[curspace];
             nclients[curspace]++;
+            
             tile();
+            XMapWindow(dpy, w);
             break;
         }
         case DestroyNotify:
@@ -134,7 +142,7 @@ int main(void) {
             break;
         case EnterNotify:
             if (ev.xcrossing.mode != NotifyNormal || ev.xcrossing.detail == NotifyInferior) { break; }
-            
+             
             for (int i = 0; i < nclients[curspace]; i++) {
                 if (clients[curspace][i].win == ev.xcrossing.window) {
                     selclient[curspace] = i;
@@ -143,6 +151,18 @@ int main(void) {
                 }
             }
             break;
+        case ButtonPress:
+            for (int i = 0; i < nclients[curspace]; i++) {
+                if (clients[curspace][i].win == ev.xbutton.window) {
+                    if (selclient[curspace] != i) {
+                        selclient[curspace] = i;
+                        tile();
+                    }
+                    break;
+                }
+            }
+            XAllowEvents(dpy, ReplayPointer, CurrentTime);
+            break;
         case KeyPress: {
             KeySym sym = XLookupKeysym(&ev.xkey, 0);
             for (size_t i = 0; i < NELEM(keys); i++) {
@@ -150,7 +170,7 @@ int main(void) {
                     Arg a  = keys[i].arg;
                     int sel = selclient[curspace];
                     int nc  = nclients[curspace];
-                    
+                     
                     switch (keys[i].act) {
                     case EXEC:
                         if (!fork()) {
@@ -203,7 +223,6 @@ int main(void) {
                         }
                         break;
                     case SEND:
-                        /* Robustness: Ignore send if destination space is full */
                         if (nc && a.i >= 0 && a.i < NSPACE && a.i != curspace && nclients[a.i] < NCLIENT) {
                             Window w = clients[curspace][sel].win;
                             rmclient(w);
@@ -218,7 +237,7 @@ int main(void) {
         }
         }
     }
-    
+     
     XCloseDisplay(dpy);
     return 0;
 }
