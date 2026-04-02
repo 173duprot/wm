@@ -79,7 +79,8 @@ static int rmclient(Window w) {
 	return 0;
 }
 
-#include "config.h"
+
+#include "wm.h"
 
 int main(void) {
 	XEvent ev;
