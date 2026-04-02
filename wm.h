@@ -1,11 +1,12 @@
+enum { EXEC, VIEW, CYCLE, SWAP, SEND, RESIZE, FULLSCR, CLOSE, QUIT };
+
 #define MODKEY   Mod4Mask
+static const char *termcmd[] = { "st", NULL };
+static const char *menucmd[] = { "dmenu_run", NULL };
+
 #define WS(n)                                      \
         { MODKEY, XK_##n, VIEW, {.i=n-1} },        \
         { MODKEY|ShiftMask, XK_##n, SEND, {.i=n-1} }
-
-enum { EXEC, VIEW, CYCLE, SWAP, SEND, RESIZE, FULLSCR, CLOSE, QUIT };
-static const char *termcmd[] = { "st", NULL };
-static const char *menucmd[] = { "dmenu_run", NULL };
 
 static Key keys[] = {
         { MODKEY,            XK_Return, EXEC,    {.v = termcmd}  },
